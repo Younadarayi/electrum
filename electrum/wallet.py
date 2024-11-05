@@ -3344,6 +3344,18 @@ class Abstract_Wallet(ABC, Logger, EventListener):
         tx_prevouts = set(txin.prevout for txin in tx.inputs())
         return dict((k,v) for k,v in self.batch_inputs.items() if k not in tx_prevouts)
 
+    def should_bump_fee(self, base_tx):
+        # fixme: since batch_txs is not persisted, we do not bump after a restart
+        # fixme: we use estimated_size because create_transaction returns a PartialTransaction
+        if base_tx is None:
+            return False
+        base_tx_fee = base_tx.get_fee()
+        recommended_fee = self.config.estimate_fee(base_tx.estimated_size(), allow_fallback_to_static_rates=True)
+        should_bump_fee = base_tx_fee * 1.1 < recommended_fee
+        if should_bump_fee:
+            self.logger.info(f'base tx fee too low {base_tx_fee} < {recommended_fee}. we will bump the fee')
+        return should_bump_fee
+
     @log_exceptions
     async def manage_batch_payments(self):
         #
@@ -3391,7 +3403,7 @@ class Abstract_Wallet(ABC, Logger, EventListener):
             to_pay = self.to_pay_after(base_tx)
             to_sweep = self.to_sweep_after(base_tx)
             to_sweep_now = dict([(k,v) for k,v in to_sweep.items() if self.can_broadcast(v)[0] is True])
-            if not to_pay and not to_sweep_now:
+            if not to_pay and not to_sweep_now and not self.should_bump_fee(base_tx):
                 continue
             try:
                 tx = self.create_batch_tx(base_tx, to_sweep_now, to_pay, password)
